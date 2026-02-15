@@ -1,4 +1,4 @@
-//! Utility functions for ZeroClaw.
+//! Utility functions for `ZeroClaw`.
 //!
 //! This module contains reusable helper functions used across the codebase.
 
@@ -54,7 +54,10 @@ mod tests {
     fn test_truncate_ascii_with_truncation() {
         // ASCII string longer than limit - truncates
         assert_eq!(truncate_with_ellipsis("hello world", 5), "hello...");
-        assert_eq!(truncate_with_ellipsis("This is a long message", 10), "This is a ...");
+        assert_eq!(
+            truncate_with_ellipsis("This is a long message", 10),
+            "This is a ..."
+        );
     }
 
     #[test]
@@ -87,7 +90,7 @@ mod tests {
     #[test]
     fn test_truncate_mixed_ascii_emoji() {
         // Mixed ASCII and emoji
-        assert_eq!(truncate_with_ellipsis("Hello 🦀 World", 8), "Hello 🦀...");
+        assert_eq!(truncate_with_ellipsis("Hello 🦀 World", 8), "Hello 🦀 ...");
         assert_eq!(truncate_with_ellipsis("Hi 😊", 10), "Hi 😊");
     }
 
@@ -110,8 +113,8 @@ mod tests {
     #[test]
     fn test_truncate_unicode_edge_case() {
         // Mix of 1-byte, 2-byte, 3-byte, and 4-byte characters
-        let s = "aé你好🦀"; // 1 + 1 + 2 + 2 + 4 bytes = 10 bytes, 5 chars
-        assert_eq!(truncate_with_ellipsis(s, 3), "aé你好...");
+        let s = "aé你好🦀";
+        assert_eq!(truncate_with_ellipsis(s, 3), "aé你...");
     }
 
     #[test]

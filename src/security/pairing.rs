@@ -28,7 +28,7 @@ pub struct PairingGuard {
     /// Whether pairing is required at all.
     require_pairing: bool,
     /// One-time pairing code (generated on startup, consumed on first pair).
-    pairing_code: Option<String>,
+    pairing_code: Mutex<Option<String>>,
     /// Set of SHA-256 hashed bearer tokens (persisted across restarts).
     paired_tokens: Mutex<HashSet<String>>,
     /// Brute-force protection: failed attempt counter + lockout time.
@@ -62,15 +62,18 @@ impl PairingGuard {
         };
         Self {
             require_pairing,
-            pairing_code: code,
+            pairing_code: Mutex::new(code),
             paired_tokens: Mutex::new(tokens),
             failed_attempts: Mutex::new((0, None)),
         }
     }
 
     /// The one-time pairing code (only set when no tokens exist yet).
-    pub fn pairing_code(&self) -> Option<&str> {
-        self.pairing_code.as_deref()
+    pub fn pairing_code(&self) -> Option<String> {
+        self.pairing_code
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Whether pairing is required at all.
@@ -97,23 +100,33 @@ impl PairingGuard {
             }
         }
 
-        if let Some(ref expected) = self.pairing_code {
-            if constant_time_eq(code.trim(), expected.trim()) {
-                // Reset failed attempts on success
-                {
-                    let mut attempts = self
-                        .failed_attempts
+        {
+            let mut pairing_code = self
+                .pairing_code
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(ref expected) = *pairing_code {
+                if constant_time_eq(code.trim(), expected.trim()) {
+                    // Reset failed attempts on success
+                    {
+                        let mut attempts = self
+                            .failed_attempts
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        *attempts = (0, None);
+                    }
+                    let token = generate_token();
+                    let mut tokens = self
+                        .paired_tokens
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    *attempts = (0, None);
+                    tokens.insert(hash_token(&token));
+
+                    // Consume the pairing code so it cannot be reused
+                    *pairing_code = None;
+
+                    return Ok(Some(token));
                 }
-                let token = generate_token();
-                let mut tokens = self
-                    .paired_tokens
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                tokens.insert(hash_token(&token));
-                return Ok(Some(token));
             }
         }
 
@@ -476,6 +489,67 @@ mod tests {
         assert!(
             err >= PAIR_LOCKOUT_SECS - 1,
             "Remaining lockout should be ~{PAIR_LOCKOUT_SECS}s, got {err}s"
+        );
+    }
+
+    // ── Code consumption (one-time use) ─────────────────────────
+
+    #[test]
+    fn pairing_code_consumed_after_successful_pair() {
+        let guard = PairingGuard::new(true, &[]);
+        let code = guard.pairing_code().expect("Should have pairing code");
+
+        // First use should succeed
+        let result1 = guard.try_pair(&code);
+        assert!(result1.is_ok(), "First pairing should succeed");
+        assert!(
+            result1.unwrap().is_some(),
+            "First pairing should return a token"
+        );
+
+        // Code should now be consumed
+        assert!(
+            guard.pairing_code().is_none(),
+            "Pairing code should be consumed after successful pair"
+        );
+    }
+
+    #[test]
+    fn pairing_code_cannot_be_reused() {
+        let guard = PairingGuard::new(true, &[]);
+        let code = guard.pairing_code().expect("Should have pairing code");
+
+        // First use should succeed
+        let result1 = guard.try_pair(&code);
+        assert!(result1.is_ok(), "First pairing should succeed");
+
+        // Second use with same code should fail (code no longer valid)
+        let result2 = guard.try_pair(&code);
+        assert!(
+            result2.is_ok(),
+            "Second pairing should not error (just fail to validate)"
+        );
+        assert!(
+            result2.unwrap().is_none(),
+            "Second pairing with same code should return None (code consumed)"
+        );
+    }
+
+    #[test]
+    fn pairing_code_whitespace_trimmed() {
+        let guard = PairingGuard::new(true, &[]);
+        let code = guard.pairing_code().expect("Should have pairing code");
+
+        // Code with extra whitespace should still work
+        let code_with_spaces = format!("  {code}  ");
+        let result = guard.try_pair(&code_with_spaces);
+        assert!(
+            result.is_ok(),
+            "Pairing with whitespace-padded code should succeed"
+        );
+        assert!(
+            result.unwrap().is_some(),
+            "Whitespace-padded code should return a token"
         );
     }
 }
