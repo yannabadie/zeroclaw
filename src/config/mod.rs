@@ -6,9 +6,9 @@ pub use schema::{
     Config, CostConfig, DelegateAgentConfig, DiscordConfig, DockerRuntimeConfig, GatewayConfig,
     HardwareConfig, HardwareTransport, HeartbeatConfig, HttpRequestConfig, IMessageConfig,
     IdentityConfig, LarkConfig, MatrixConfig, MemoryConfig, ModelRouteConfig, ObservabilityConfig,
-    PeripheralBoardConfig, PeripheralsConfig, ReliabilityConfig, ResourceLimitsConfig, RuntimeConfig,
-    SandboxBackend, SandboxConfig, SchedulerConfig, SecretsConfig, SecurityConfig, SlackConfig,
-    TelegramConfig, TunnelConfig, WebhookConfig,
+    PeripheralBoardConfig, PeripheralsConfig, ReliabilityConfig, ResourceLimitsConfig,
+    RuntimeConfig, SandboxBackend, SandboxConfig, SchedulerConfig, SecretsConfig, SecurityConfig,
+    SlackConfig, TelegramConfig, TunnelConfig, WebhookConfig,
 };
 
 #[cfg(test)]
