@@ -1569,6 +1569,12 @@ fn setup_provider(workspace_dir: &Path) -> Result<(String, String, String)> {
             ),
             ("mistralai/Mixtral-8x22B-Instruct-v0.1", "Mixtral 8x22B"),
         ],
+        "nvidia" | "nvidia-nim" | "build.nvidia.com" => vec![
+            ("deepseek-ai/DeepSeek-R1", "DeepSeek R1 (reasoning)"),
+            ("meta/llama-3.1-70b-instruct", "Llama 3.1 70B Instruct"),
+            ("mistralai/Mistral-7B-Instruct-v0.3", "Mistral 7B Instruct"),
+            ("meta/llama-3.1-405b-instruct", "Llama 3.1 405B Instruct"),
+        ],
         "cohere" => vec![
             ("command-r-plus", "Command R+ (flagship)"),
             ("command-r", "Command R (fast)"),
@@ -1792,7 +1798,7 @@ fn provider_env_var(name: &str) -> &'static str {
         "cloudflare" | "cloudflare-ai" => "CLOUDFLARE_API_KEY",
         "bedrock" | "aws-bedrock" => "AWS_ACCESS_KEY_ID",
         "gemini" => "GEMINI_API_KEY",
-        "nvidia" | "nvidia-nim" | "build.nvidia.com" => "NVIDIA_NIM_API_KEY",
+        "nvidia" | "nvidia-nim" | "build.nvidia.com" => "NVIDIA_API_KEY",
         _ => "API_KEY",
     }
 }
@@ -4457,9 +4463,9 @@ mod tests {
         assert_eq!(provider_env_var("google"), "GEMINI_API_KEY"); // alias
         assert_eq!(provider_env_var("google-gemini"), "GEMINI_API_KEY"); // alias
         assert_eq!(provider_env_var("gemini"), "GEMINI_API_KEY");
-        assert_eq!(provider_env_var("nvidia"), "NVIDIA_NIM_API_KEY");
-        assert_eq!(provider_env_var("nvidia-nim"), "NVIDIA_NIM_API_KEY"); // alias
-        assert_eq!(provider_env_var("build.nvidia.com"), "NVIDIA_NIM_API_KEY"); // alias
+        assert_eq!(provider_env_var("nvidia"), "NVIDIA_API_KEY");
+        assert_eq!(provider_env_var("nvidia-nim"), "NVIDIA_API_KEY"); // alias
+        assert_eq!(provider_env_var("build.nvidia.com"), "NVIDIA_API_KEY"); // alias
     }
 
     #[test]

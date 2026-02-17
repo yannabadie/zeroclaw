@@ -130,7 +130,7 @@ fn resolve_api_key(name: &str, api_key: Option<&str>) -> Option<String> {
             vec!["DASHSCOPE_API_KEY"]
         }
         "zai" | "z.ai" => vec!["ZAI_API_KEY"],
-        "nvidia" | "nvidia-nim" | "build.nvidia.com" => vec!["NVIDIA_NIM_API_KEY"],
+        "nvidia" | "nvidia-nim" | "build.nvidia.com" => vec!["NVIDIA_API_KEY"],
         "synthetic" => vec!["SYNTHETIC_API_KEY"],
         "opencode" | "opencode-zen" => vec!["OPENCODE_API_KEY"],
         "vercel" | "vercel-ai" => vec!["VERCEL_API_KEY"],
