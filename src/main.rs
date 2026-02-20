@@ -120,6 +120,10 @@ enum Commands {
         #[arg(long)]
         interactive: bool,
 
+        /// Overwrite existing config without confirmation
+        #[arg(long)]
+        force: bool,
+
         /// Reconfigure channels only (fast repair flow)
         #[arg(long)]
         channels_only: bool,
@@ -646,6 +650,7 @@ async fn main() -> Result<()> {
     // not allowed", we run the wizard on a blocking thread via spawn_blocking.
     if let Commands::Onboard {
         interactive,
+        force,
         channels_only,
         api_key,
         provider,
@@ -654,6 +659,7 @@ async fn main() -> Result<()> {
     } = &cli.command
     {
         let interactive = *interactive;
+        let force = *force;
         let channels_only = *channels_only;
         let api_key = api_key.clone();
         let provider = provider.clone();
@@ -668,16 +674,20 @@ async fn main() -> Result<()> {
         {
             bail!("--channels-only does not accept --api-key, --provider, --model, or --memory");
         }
+        if channels_only && force {
+            bail!("--channels-only does not accept --force");
+        }
         let config = if channels_only {
             onboard::run_channels_repair_wizard().await
         } else if interactive {
-            onboard::run_wizard().await
+            onboard::run_wizard(force).await
         } else {
             onboard::run_quick_setup(
                 api_key.as_deref(),
                 provider.as_deref(),
                 model.as_deref(),
                 memory.as_deref(),
+                force,
             )
             .await
         }?;
@@ -1392,6 +1402,7 @@ mod tests {
         match cli.command {
             Commands::Onboard {
                 interactive,
+                force,
                 channels_only,
                 api_key,
                 provider,
@@ -1399,11 +1410,23 @@ mod tests {
                 ..
             } => {
                 assert!(!interactive);
+                assert!(!force);
                 assert!(!channels_only);
                 assert_eq!(provider.as_deref(), Some("openrouter"));
                 assert_eq!(model.as_deref(), Some("custom-model-946"));
                 assert_eq!(api_key.as_deref(), Some("sk-issue946"));
             }
+            other => panic!("expected onboard command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn onboard_cli_accepts_force_flag() {
+        let cli = Cli::try_parse_from(["zeroclaw", "onboard", "--force"])
+            .expect("onboard --force should parse");
+
+        match cli.command {
+            Commands::Onboard { force, .. } => assert!(force),
             other => panic!("expected onboard command, got {other:?}"),
         }
     }
