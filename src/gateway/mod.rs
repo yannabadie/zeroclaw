@@ -26,6 +26,7 @@ use crate::tools;
 use crate::tools::traits::ToolSpec;
 use crate::util::truncate_with_ellipsis;
 use anyhow::{Context, Result};
+use serde::Deserialize as SerdeDeserialize;
 use axum::{
     body::Bytes,
     extract::{ConnectInfo, Query, State},

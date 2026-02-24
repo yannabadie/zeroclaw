@@ -146,7 +146,8 @@ fn is_non_retryable_rate_limit(err: &anyhow::Error) -> bool {
 }
 
 /// Try to extract a Retry-After value (in milliseconds) from an error message.
-/// Looks for patterns like `Retry-After: 5` or `retry_after: 2.5` in the error string.
+/// Looks for patterns like `Retry-After: 5`, `retry_after: 2.5`,
+/// or Gemini-style `quota will reset after 43s` in the error string.
 fn parse_retry_after_ms(err: &anyhow::Error) -> Option<u64> {
     let msg = err.to_string();
     let lower = msg.to_lowercase();
@@ -157,6 +158,8 @@ fn parse_retry_after_ms(err: &anyhow::Error) -> Option<u64> {
         "retry_after:",
         "retry-after ",
         "retry_after ",
+        // Gemini-style: "quota will reset after 43s"
+        "reset after ",
     ] {
         if let Some(pos) = lower.find(prefix) {
             let after = &msg[pos + prefix.len()..];
@@ -282,8 +285,8 @@ impl ReliableProvider {
     /// Compute backoff duration, respecting Retry-After if present.
     fn compute_backoff(&self, base: u64, err: &anyhow::Error) -> u64 {
         if let Some(retry_after) = parse_retry_after_ms(err) {
-            // Use Retry-After but cap at 30s to avoid indefinite waits
-            retry_after.min(30_000).max(base)
+            // Use Retry-After but cap at 60s to handle Gemini quota resets (up to ~45s)
+            retry_after.min(60_000).max(base)
         } else {
             base
         }
@@ -399,7 +402,7 @@ impl Provider for ReliableProvider {
                                     "Provider call failed, retrying"
                                 );
                                 tokio::time::sleep(Duration::from_millis(wait)).await;
-                                backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
+                                backoff_ms = (backoff_ms.saturating_mul(2)).min(30_000);
                             }
                         }
                     }
@@ -517,7 +520,7 @@ impl Provider for ReliableProvider {
                                     "Provider call failed, retrying"
                                 );
                                 tokio::time::sleep(Duration::from_millis(wait)).await;
-                                backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
+                                backoff_ms = (backoff_ms.saturating_mul(2)).min(30_000);
                             }
                         }
                     }
@@ -641,7 +644,7 @@ impl Provider for ReliableProvider {
                                     "Provider call failed, retrying"
                                 );
                                 tokio::time::sleep(Duration::from_millis(wait)).await;
-                                backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
+                                backoff_ms = (backoff_ms.saturating_mul(2)).min(30_000);
                             }
                         }
                     }
@@ -752,7 +755,7 @@ impl Provider for ReliableProvider {
                                     "Provider call failed, retrying"
                                 );
                                 tokio::time::sleep(Duration::from_millis(wait)).await;
-                                backoff_ms = (backoff_ms.saturating_mul(2)).min(10_000);
+                                backoff_ms = (backoff_ms.saturating_mul(2)).min(30_000);
                             }
                         }
                     }
@@ -1386,6 +1389,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_retry_after_gemini_quota_reset() {
+        let err = anyhow::anyhow!(
+            "429 Too Many Requests: Your quota will reset after 43s."
+        );
+        assert_eq!(parse_retry_after_ms(&err), Some(43_000));
+    }
+
+    #[test]
     fn rate_limited_detection() {
         assert!(is_rate_limited(&anyhow::anyhow!("429 Too Many Requests")));
         assert!(is_rate_limited(&anyhow::anyhow!(
@@ -1438,10 +1449,10 @@ mod tests {
     }
 
     #[test]
-    fn compute_backoff_caps_at_30s() {
+    fn compute_backoff_caps_at_60s() {
         let provider = ReliableProvider::new(vec![], 0, 500);
         let err = anyhow::anyhow!("429 Retry-After: 120");
-        assert_eq!(provider.compute_backoff(500, &err), 30_000);
+        assert_eq!(provider.compute_backoff(500, &err), 60_000);
     }
 
     #[test]
