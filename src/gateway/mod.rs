@@ -35,7 +35,6 @@ use axum::{
     Router,
 };
 use parking_lot::Mutex;
-use serde::Deserialize as SerdeDeserialize;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;

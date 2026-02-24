@@ -851,7 +851,7 @@ impl GeminiProvider {
         // 2. oauth_creds.json fields (some CLI versions store them)
         // 3. id_token extraction (JWT aud/azp claim)
         // 4. Dynamic extraction from Gemini CLI source (resilient to updates)
-        let (cli_extracted_id, cli_extracted_secret) = {
+        let (cli_extracted_id, _cli_extracted_secret) = {
             static EXTRACTED: std::sync::OnceLock<(Option<String>, Option<String>)> =
                 std::sync::OnceLock::new();
             EXTRACTED
