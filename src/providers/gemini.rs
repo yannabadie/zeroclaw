@@ -405,7 +405,9 @@ fn extract_gemini_cli_oauth_constants() -> (Option<String>, Option<String>) {
         .ok()
         .and_then(|o| {
             if o.status.success() {
-                String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
+                String::from_utf8(o.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
             } else {
                 None
             }
@@ -423,8 +425,8 @@ fn extract_gemini_cli_oauth_constants() -> (Option<String>, Option<String>) {
     let oauth2_path = loop {
         if let Some(parent) = pkg_root.parent() {
             // Check if this level has the oauth2.js file
-            let candidate = parent
-                .join("node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js");
+            let candidate =
+                parent.join("node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js");
             if candidate.exists() {
                 break Some(candidate);
             }
@@ -447,7 +449,10 @@ fn extract_gemini_cli_oauth_constants() -> (Option<String>, Option<String>) {
                 "/usr/lib/node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
                 "/usr/local/lib/node_modules/@google/gemini-cli/node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js",
             ];
-            match known_paths.iter().find(|p| std::path::Path::new(p).exists()) {
+            match known_paths
+                .iter()
+                .find(|p| std::path::Path::new(p).exists())
+            {
                 Some(p) => std::path::PathBuf::from(p),
                 None => return (None, None),
             }
@@ -782,8 +787,9 @@ impl GeminiProvider {
 
         // Check GEMINI_CLI_HOME first (Gemini CLI >= 0.30 support)
         if let Ok(cli_home) = std::env::var("GEMINI_CLI_HOME") {
-            let cli_home_path =
-                PathBuf::from(cli_home).join(".gemini").join("oauth_creds.json");
+            let cli_home_path = PathBuf::from(cli_home)
+                .join(".gemini")
+                .join("oauth_creds.json");
             if cli_home_path.exists() {
                 paths.push(cli_home_path);
             }
@@ -893,7 +899,13 @@ impl GeminiProvider {
         #[cfg(target_os = "linux")]
         {
             let output = std::process::Command::new("secret-tool")
-                .args(["lookup", "service", "gemini-cli-oauth", "account", "main-account"])
+                .args([
+                    "lookup",
+                    "service",
+                    "gemini-cli-oauth",
+                    "account",
+                    "main-account",
+                ])
                 .output()
                 .ok()?;
             if !output.status.success() || output.stdout.is_empty() {
@@ -923,10 +935,20 @@ impl GeminiProvider {
             };
 
             let client_id = Self::load_non_empty_env("GEMINI_OAUTH_CLIENT_ID")
-                .or_else(|| creds.client_id.as_deref().and_then(Self::normalize_non_empty))
+                .or_else(|| {
+                    creds
+                        .client_id
+                        .as_deref()
+                        .and_then(Self::normalize_non_empty)
+                })
                 .or_else(|| cli_extracted_id);
             let client_secret = Self::load_non_empty_env("GEMINI_OAUTH_CLIENT_SECRET")
-                .or_else(|| creds.client_secret.as_deref().and_then(Self::normalize_non_empty))
+                .or_else(|| {
+                    creds
+                        .client_secret
+                        .as_deref()
+                        .and_then(Self::normalize_non_empty)
+                })
                 .or_else(|| cli_extracted_secret);
 
             tracing::info!("Loaded Gemini CLI OAuth credentials from OS keychain");
@@ -1657,16 +1679,12 @@ impl Provider for GeminiProvider {
                 }),
                 "assistant" => {
                     // Check for NativeToolDispatcher JSON with tool_calls
-                    if let Ok(parsed) =
-                        serde_json::from_str::<serde_json::Value>(&msg.content)
-                    {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg.content) {
                         if let Some(tool_calls) =
                             parsed.get("tool_calls").and_then(|v| v.as_array())
                         {
                             let mut parts = Vec::new();
-                            if let Some(text) =
-                                parsed.get("content").and_then(|v| v.as_str())
-                            {
+                            if let Some(text) = parsed.get("content").and_then(|v| v.as_str()) {
                                 if !text.is_empty() {
                                     parts.push(Part::text(text));
                                 }
@@ -1677,8 +1695,7 @@ impl Provider for GeminiProvider {
                                     tc.get("name").and_then(|v| v.as_str()),
                                     tc.get("arguments"),
                                 ) {
-                                    tool_call_id_to_name
-                                        .insert(id.to_string(), name.to_string());
+                                    tool_call_id_to_name.insert(id.to_string(), name.to_string());
                                     let args_value = if let Some(s) = args.as_str() {
                                         serde_json::from_str(s).unwrap_or(
                                             serde_json::Value::Object(serde_json::Map::new()),
@@ -1715,9 +1732,7 @@ impl Provider for GeminiProvider {
                 }
                 "tool" => {
                     // Tool result from NativeToolDispatcher
-                    if let Ok(parsed) =
-                        serde_json::from_str::<serde_json::Value>(&msg.content)
-                    {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg.content) {
                         if let (Some(tool_call_id), Some(result_content)) = (
                             parsed.get("tool_call_id").and_then(|v| v.as_str()),
                             parsed.get("content").and_then(|v| v.as_str()),
@@ -1728,10 +1743,8 @@ impl Provider for GeminiProvider {
                                 .unwrap_or_else(|| "unknown".to_string());
                             // Gemini requires response to be a Struct (JSON object).
                             // Wrap non-object values in {"result": ...}.
-                            let raw_value: serde_json::Value =
-                                serde_json::from_str(result_content).unwrap_or(
-                                    serde_json::Value::String(result_content.to_string()),
-                                );
+                            let raw_value: serde_json::Value = serde_json::from_str(result_content)
+                                .unwrap_or(serde_json::Value::String(result_content.to_string()));
                             let response_value = if raw_value.is_object() {
                                 raw_value
                             } else {
@@ -2977,8 +2990,7 @@ mod tests {
                 "arguments": "{\"command\": \"ls\"}"
             }]
         });
-        let parsed: serde_json::Value =
-            serde_json::from_str(&msg_content.to_string()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&msg_content.to_string()).unwrap();
         let tool_calls = parsed.get("tool_calls").and_then(|v| v.as_array());
         assert!(tool_calls.is_some());
         assert_eq!(tool_calls.unwrap().len(), 1);
@@ -2990,8 +3002,7 @@ mod tests {
             "tool_call_id": "call_123",
             "content": "file1.txt\nfile2.txt"
         });
-        let parsed: serde_json::Value =
-            serde_json::from_str(&msg_content.to_string()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&msg_content.to_string()).unwrap();
         assert_eq!(
             parsed.get("tool_call_id").and_then(|v| v.as_str()),
             Some("call_123")
@@ -3114,10 +3125,7 @@ mod tests {
     #[test]
     fn extract_js_string_constant_missing() {
         let source = "const OTHER_THING = 'value';";
-        assert_eq!(
-            extract_js_string_constant(source, "OAUTH_CLIENT_ID"),
-            None
-        );
+        assert_eq!(extract_js_string_constant(source, "OAUTH_CLIENT_ID"), None);
     }
 
     #[test]

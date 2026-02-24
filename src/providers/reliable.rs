@@ -1390,9 +1390,7 @@ mod tests {
 
     #[test]
     fn parse_retry_after_gemini_quota_reset() {
-        let err = anyhow::anyhow!(
-            "429 Too Many Requests: Your quota will reset after 43s."
-        );
+        let err = anyhow::anyhow!("429 Too Many Requests: Your quota will reset after 43s.");
         assert_eq!(parse_retry_after_ms(&err), Some(43_000));
     }
 
