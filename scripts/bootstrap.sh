@@ -149,6 +149,9 @@ detect_release_target() {
     Darwin:arm64|Darwin:aarch64)
       echo "aarch64-apple-darwin"
       ;;
+    FreeBSD:amd64|FreeBSD:x86_64)
+      echo "x86_64-unknown-freebsd"
+      ;;
     *)
       return 1
       ;;
