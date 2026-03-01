@@ -327,10 +327,7 @@ impl ReliableProvider {
         // provider's model name (which would cause a 400/404 error).
         // When no remaps are configured at all, preserve backward-compatible
         // behavior: send the original model to every provider.
-        if chain.is_empty()
-            && !is_primary_provider
-            && !self.provider_model_fallbacks.is_empty()
-        {
+        if chain.is_empty() && !is_primary_provider && !self.provider_model_fallbacks.is_empty() {
             tracing::debug!(
                 provider = provider_name,
                 model = model,
