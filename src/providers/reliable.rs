@@ -1471,6 +1471,65 @@ mod tests {
         assert!(!fallback_seen.iter().any(|m| m == "glm-5"));
     }
 
+    #[tokio::test]
+    async fn fallback_provider_without_remap_is_skipped() {
+        // Primary provider fails on its model.
+        // Fallback provider has NO remap configured.
+        // Expected: fallback is skipped entirely (no request sent), cascade fails.
+        let primary = Arc::new(ModelAwareMock {
+            calls: Arc::new(AtomicUsize::new(0)),
+            models_seen: parking_lot::Mutex::new(Vec::new()),
+            fail_models: vec!["deepseek-chat"],
+            response: "never",
+        });
+        let fallback_no_remap = Arc::new(ModelAwareMock {
+            calls: Arc::new(AtomicUsize::new(0)),
+            models_seen: parking_lot::Mutex::new(Vec::new()),
+            fail_models: vec![],
+            response: "should not reach",
+        });
+
+        // Only configure remap for primary, NOT for the fallback
+        let mut fallbacks = HashMap::new();
+        fallbacks.insert("deepseek".to_string(), vec![]); // primary: no extra models
+
+        let provider = ReliableProvider::new(
+            vec![
+                (
+                    "deepseek".into(),
+                    Box::new(primary.clone()) as Box<dyn Provider>,
+                ),
+                (
+                    "gemini".into(),
+                    Box::new(fallback_no_remap.clone()) as Box<dyn Provider>,
+                ),
+            ],
+            0,
+            1,
+        )
+        .with_model_fallbacks(fallbacks);
+
+        let err = provider
+            .simple_chat("hello", "deepseek-chat", 0.0)
+            .await
+            .expect_err("should fail since primary fails and fallback is skipped");
+
+        assert!(err.to_string().contains("All providers/models failed"));
+
+        // Primary should have been called with "deepseek-chat"
+        let primary_seen = primary.models_seen.lock();
+        assert_eq!(primary_seen.len(), 1);
+        assert_eq!(primary_seen[0], "deepseek-chat");
+
+        // Fallback should NOT have been called at all
+        let fallback_seen = fallback_no_remap.models_seen.lock();
+        assert!(
+            fallback_seen.is_empty(),
+            "Fallback without remap should be skipped, but saw: {:?}",
+            *fallback_seen
+        );
+    }
+
     // ── New tests: auth rotation ──
 
     #[tokio::test]
