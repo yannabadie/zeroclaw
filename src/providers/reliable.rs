@@ -322,7 +322,21 @@ impl ReliableProvider {
             }
         }
 
-        if chain.is_empty() {
+        // When per-provider model remaps are configured, skip fallback
+        // providers that have no remap entry instead of sending the primary
+        // provider's model name (which would cause a 400/404 error).
+        // When no remaps are configured at all, preserve backward-compatible
+        // behavior: send the original model to every provider.
+        if chain.is_empty()
+            && !is_primary_provider
+            && !self.provider_model_fallbacks.is_empty()
+        {
+            tracing::debug!(
+                provider = provider_name,
+                model = model,
+                "Skipping provider: no model remap configured"
+            );
+        } else if chain.is_empty() {
             chain.push(model);
         }
 
