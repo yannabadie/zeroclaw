@@ -47,6 +47,7 @@ pub mod memory_forget;
 pub mod memory_recall;
 pub mod memory_store;
 pub mod model_routing_config;
+pub mod onedrive;
 pub mod pdf_read;
 pub mod process;
 pub mod proxy_config;
@@ -96,6 +97,7 @@ pub use memory_forget::MemoryForgetTool;
 pub use memory_recall::MemoryRecallTool;
 pub use memory_store::MemoryStoreTool;
 pub use model_routing_config::ModelRoutingConfigTool;
+pub use onedrive::OneDriveTool;
 pub use pdf_read::PdfReadTool;
 pub use process::ProcessTool;
 pub use proxy_config::ProxyConfigTool;
@@ -389,6 +391,14 @@ pub fn all_tools_with_runtime(
     // Vision tools are always available
     tool_arcs.push(Arc::new(ScreenshotTool::new(security.clone())));
     tool_arcs.push(Arc::new(ImageInfoTool::new(security.clone())));
+
+    // OneDrive integration (personal Microsoft account)
+    if root_config.onedrive.enabled {
+        tool_arcs.push(Arc::new(OneDriveTool::new(
+            security.clone(),
+            root_config.onedrive.clone(),
+        )));
+    }
 
     if let Some(key) = composio_key {
         if !key.is_empty() {

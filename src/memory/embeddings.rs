@@ -1,5 +1,8 @@
 use async_trait::async_trait;
 
+#[cfg(feature = "local-embeddings")]
+use std::sync::{Arc, Mutex};
+
 /// Trait for embedding providers — convert text to vectors
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
@@ -154,6 +157,95 @@ impl EmbeddingProvider for OpenAiEmbedding {
     }
 }
 
+// ── Local ONNX embeddings via fastembed-rs ──────────────────
+#[cfg(feature = "local-embeddings")]
+pub struct FastEmbedProvider {
+    model: Arc<Mutex<fastembed::TextEmbedding>>,
+    dims: usize,
+}
+
+#[cfg(feature = "local-embeddings")]
+impl FastEmbedProvider {
+    pub fn new(model_name: &str, cache_dir: Option<&str>) -> anyhow::Result<Self> {
+        let embedding_model = match model_name {
+            "bge-m3" | "BAAI/bge-m3" => fastembed::EmbeddingModel::BGEM3,
+            "bge-small-en-v1.5" => fastembed::EmbeddingModel::BGESmallENV15,
+            "bge-base-en-v1.5" => fastembed::EmbeddingModel::BGEBaseENV15,
+            "all-MiniLM-L6-v2" => fastembed::EmbeddingModel::AllMiniLML6V2,
+            "multilingual-e5-small" => fastembed::EmbeddingModel::MultilingualE5Small,
+            "multilingual-e5-base" => fastembed::EmbeddingModel::MultilingualE5Base,
+            "multilingual-e5-large" => fastembed::EmbeddingModel::MultilingualE5Large,
+            _ => {
+                tracing::warn!(
+                    model = model_name,
+                    "Unknown fastembed model, defaulting to BGE-M3"
+                );
+                fastembed::EmbeddingModel::BGEM3
+            }
+        };
+
+        let info = fastembed::TextEmbedding::get_model_info(&embedding_model)
+            .map_err(|e| anyhow::anyhow!("Failed to get model info: {e}"))?;
+        let dims = info.dim;
+
+        let mut opts = fastembed::InitOptionsWithLength::new(embedding_model)
+            .with_show_download_progress(true);
+
+        if let Some(dir) = cache_dir {
+            opts = opts.with_cache_dir(std::path::PathBuf::from(dir));
+        }
+
+        let model = fastembed::TextEmbedding::try_new(opts)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize fastembed model: {e}"))?;
+
+        tracing::info!(
+            model = model_name,
+            dims,
+            "FastEmbed ONNX embedding provider initialized"
+        );
+
+        Ok(Self {
+            model: Arc::new(Mutex::new(model)),
+            dims,
+        })
+    }
+}
+
+#[cfg(feature = "local-embeddings")]
+#[async_trait]
+impl EmbeddingProvider for FastEmbedProvider {
+    fn name(&self) -> &str {
+        "fastembed"
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dims
+    }
+
+    async fn embed(&self, texts: &[&str]) -> anyhow::Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let owned: Vec<String> = texts.iter().map(|t| t.to_string()).collect();
+        let model = Arc::clone(&self.model);
+
+        // fastembed is CPU-bound; run in blocking thread to avoid starving the async runtime
+        let embeddings = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Vec<f32>>> {
+            let mut guard = model
+                .lock()
+                .map_err(|e| anyhow::anyhow!("FastEmbed mutex poisoned: {e}"))?;
+            guard
+                .embed(&owned, None)
+                .map_err(|e| anyhow::anyhow!("FastEmbed inference error: {e}"))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("FastEmbed task join error: {e}"))??;
+
+        Ok(embeddings)
+    }
+}
+
 // ── Factory ──────────────────────────────────────────────────
 
 pub fn create_embedding_provider(
@@ -163,6 +255,19 @@ pub fn create_embedding_provider(
     dims: usize,
 ) -> Box<dyn EmbeddingProvider> {
     match provider {
+        #[cfg(feature = "local-embeddings")]
+        "fastembed" | "onnx" | "local" => match FastEmbedProvider::new(model, None) {
+            Ok(p) => Box::new(p),
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to initialize fastembed provider, falling back to noop");
+                Box::new(NoopEmbedding)
+            }
+        },
+        #[cfg(not(feature = "local-embeddings"))]
+        "fastembed" | "onnx" | "local" => {
+            tracing::error!("fastembed requested but 'local-embeddings' feature not enabled; falling back to noop");
+            Box::new(NoopEmbedding)
+        }
         "openai" => {
             let key = api_key.unwrap_or("");
             Box::new(OpenAiEmbedding::new(
@@ -281,6 +386,25 @@ mod tests {
         // "custom:" with no URL — should still construct without panic
         let p = create_embedding_provider("custom:", None, "model", 768);
         assert_eq!(p.name(), "openai");
+    }
+
+    #[test]
+    fn factory_fastembed_without_feature_returns_noop() {
+        // When the feature is disabled, "fastembed" should still not panic
+        #[cfg(not(feature = "local-embeddings"))]
+        {
+            let p = create_embedding_provider("fastembed", None, "bge-m3", 1024);
+            assert_eq!(p.name(), "none");
+        }
+    }
+
+    #[test]
+    fn factory_onnx_alias_maps_to_fastembed() {
+        #[cfg(not(feature = "local-embeddings"))]
+        {
+            let p = create_embedding_provider("onnx", None, "bge-m3", 1024);
+            assert_eq!(p.name(), "none");
+        }
     }
 
     #[test]

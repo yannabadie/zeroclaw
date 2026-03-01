@@ -32,6 +32,7 @@ pub mod nostr;
 pub mod qq;
 pub mod signal;
 pub mod slack;
+pub mod synthesis;
 pub mod telegram;
 pub mod traits;
 pub mod transcription;
@@ -4170,6 +4171,7 @@ fn collect_configured_channels(
         .with_group_reply_allowed_senders(tg.group_reply_allowed_sender_ids())
         .with_streaming(tg.stream_mode, tg.draft_update_interval_ms)
         .with_transcription(config.transcription.clone())
+        .with_synthesis(config.synthesis.clone())
         .with_workspace_dir(config.workspace_dir.clone());
 
         if let Some(ref base_url) = tg.base_url {

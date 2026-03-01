@@ -32,6 +32,10 @@ pub struct SqliteMemory {
     vector_weight: f32,
     keyword_weight: f32,
     cache_max: usize,
+    /// Fusion strategy: "weighted" (linear) or "rrf" (Reciprocal Rank Fusion).
+    fusion_strategy: String,
+    /// RRF k parameter (default 60.0).
+    rrf_k: f32,
 }
 
 impl SqliteMemory {
@@ -90,7 +94,18 @@ impl SqliteMemory {
             vector_weight,
             keyword_weight,
             cache_max,
+            fusion_strategy: "weighted".into(),
+            rrf_k: 60.0,
         })
+    }
+
+    /// Set the fusion strategy for hybrid search.
+    /// "rrf" for Reciprocal Rank Fusion, anything else for weighted linear combination.
+    #[allow(dead_code)]
+    pub fn with_fusion_strategy(mut self, strategy: &str, rrf_k: f32) -> Self {
+        self.fusion_strategy = strategy.to_lowercase();
+        self.rrf_k = rrf_k;
+        self
     }
 
     /// Open SQLite connection, optionally with a timeout (for locked/slow storage).
@@ -494,6 +509,8 @@ impl Memory for SqliteMemory {
         let sid = session_id.map(String::from);
         let vector_weight = self.vector_weight;
         let keyword_weight = self.keyword_weight;
+        let fusion_strategy = self.fusion_strategy.clone();
+        let rrf_k = self.rrf_k;
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<MemoryEntry>> {
             let conn = conn.lock();
@@ -509,7 +526,7 @@ impl Memory for SqliteMemory {
                 Vec::new()
             };
 
-            // Hybrid merge
+            // Hybrid merge (weighted linear or RRF)
             let merged = if vector_results.is_empty() {
                 keyword_results
                     .iter()
@@ -520,6 +537,8 @@ impl Memory for SqliteMemory {
                         final_score: *score,
                     })
                     .collect::<Vec<_>>()
+            } else if fusion_strategy == "rrf" {
+                vector::rrf_merge(&vector_results, &keyword_results, rrf_k, limit)
             } else {
                 vector::hybrid_merge(
                     &vector_results,

@@ -29,11 +29,14 @@ struct IncomingAttachment {
     kind: IncomingAttachmentKind,
 }
 
-/// The kind of incoming attachment (document vs photo).
+/// The kind of incoming attachment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IncomingAttachmentKind {
     Document,
     Photo,
+    Video,
+    Audio,
+    Sticker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +196,15 @@ fn format_attachment_content(
             if is_image_extension(local_path) =>
         {
             format!("[IMAGE:{}]", local_path.display())
+        }
+        IncomingAttachmentKind::Video => {
+            format!("[Video: {}] {}", local_filename, local_path.display())
+        }
+        IncomingAttachmentKind::Audio => {
+            format!("[Audio: {}] {}", local_filename, local_path.display())
+        }
+        IncomingAttachmentKind::Sticker => {
+            format!("[Sticker] {}", local_path.display())
         }
         _ => {
             format!("[Document: {}] {}", local_filename, local_path.display())
@@ -451,8 +463,7 @@ pub struct TelegramChannel {
     bot_token: String,
     allowed_users: Arc<RwLock<Vec<String>>>,
     pairing: Option<PairingGuard>,
-    client: reqwest::Client,
-    typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    typing_handles: Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>,
     stream_mode: StreamMode,
     draft_update_interval_ms: u64,
     last_draft_edit: Mutex<std::collections::HashMap<String, std::time::Instant>>,
@@ -463,7 +474,10 @@ pub struct TelegramChannel {
     /// Override for local Bot API servers or testing.
     api_base: String,
     transcription: Option<crate::config::TranscriptionConfig>,
+    synthesis: Option<crate::config::SynthesisConfig>,
     voice_transcriptions: Mutex<std::collections::HashMap<String, String>>,
+    /// Tracks chat IDs whose last incoming message was a voice message.
+    voice_chats: Mutex<std::collections::HashSet<String>>,
     workspace_dir: Option<std::path::PathBuf>,
 }
 
@@ -485,17 +499,18 @@ impl TelegramChannel {
             bot_token,
             allowed_users: Arc::new(RwLock::new(normalized_allowed)),
             pairing,
-            client: reqwest::Client::new(),
             stream_mode: StreamMode::Off,
             draft_update_interval_ms: 1000,
             last_draft_edit: Mutex::new(std::collections::HashMap::new()),
-            typing_handle: Mutex::new(None),
+            typing_handles: Mutex::new(std::collections::HashMap::new()),
             mention_only,
             group_reply_allowed_sender_ids: Vec::new(),
             bot_username: Mutex::new(None),
             api_base: "https://api.telegram.org".to_string(),
             transcription: None,
+            synthesis: None,
             voice_transcriptions: Mutex::new(std::collections::HashMap::new()),
+            voice_chats: Mutex::new(std::collections::HashSet::new()),
             workspace_dir: None,
         }
     }
@@ -535,6 +550,14 @@ impl TelegramChannel {
     pub fn with_transcription(mut self, config: crate::config::TranscriptionConfig) -> Self {
         if config.enabled {
             self.transcription = Some(config);
+        }
+        self
+    }
+
+    /// Configure speech synthesis (TTS) for voice replies.
+    pub fn with_synthesis(mut self, config: crate::config::SynthesisConfig) -> Self {
+        if config.enabled {
+            self.synthesis = Some(config);
         }
         self
     }
@@ -1290,6 +1313,61 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             });
         }
 
+        // Try video
+        if let Some(video) = message.get("video") {
+            let file_id = video.get("file_id")?.as_str()?.to_string();
+            let file_name = video
+                .get("file_name")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from);
+            let file_size = video.get("file_size").and_then(serde_json::Value::as_u64);
+            let caption = message
+                .get("caption")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from);
+            return Some(IncomingAttachment {
+                file_id,
+                file_name,
+                file_size,
+                caption,
+                kind: IncomingAttachmentKind::Video,
+            });
+        }
+
+        // Try audio
+        if let Some(audio) = message.get("audio") {
+            let file_id = audio.get("file_id")?.as_str()?.to_string();
+            let file_name = audio
+                .get("file_name")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from);
+            let file_size = audio.get("file_size").and_then(serde_json::Value::as_u64);
+            let caption = message
+                .get("caption")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from);
+            return Some(IncomingAttachment {
+                file_id,
+                file_name,
+                file_size,
+                caption,
+                kind: IncomingAttachmentKind::Audio,
+            });
+        }
+
+        // Try sticker
+        if let Some(sticker) = message.get("sticker") {
+            let file_id = sticker.get("file_id")?.as_str()?.to_string();
+            let file_size = sticker.get("file_size").and_then(serde_json::Value::as_u64);
+            return Some(IncomingAttachment {
+                file_id,
+                file_name: None,
+                file_size,
+                caption: None,
+                kind: IncomingAttachmentKind::Sticker,
+            });
+        }
+
         None
     }
 
@@ -1408,10 +1486,16 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             Some(name) => sanitize_attachment_filename(name)
                 .unwrap_or_else(|| format!("attachment_{chat_id}_{message_id}.bin")),
             None => {
-                // For photos, derive extension from Telegram file path
                 let ext =
                     sanitize_generated_extension(tg_file_path.rsplit('.').next().unwrap_or("jpg"));
-                format!("photo_{chat_id}_{message_id}.{ext}")
+                let prefix = match attachment.kind {
+                    IncomingAttachmentKind::Photo => "photo",
+                    IncomingAttachmentKind::Video => "video",
+                    IncomingAttachmentKind::Audio => "audio",
+                    IncomingAttachmentKind::Sticker => "sticker",
+                    IncomingAttachmentKind::Document => "doc",
+                };
+                format!("{prefix}_{chat_id}_{message_id}.{ext}")
             }
         };
 
@@ -1601,6 +1685,9 @@ Allowlist Telegram username (without '@') or numeric user ID.",
             sender_identity,
             chat_id
         );
+
+        // Mark this chat as having received a voice message (for voice reply)
+        self.voice_chats.lock().insert(chat_id.to_string());
 
         let content = if let Some(quote) = self.extract_reply_context(message) {
             format!("{quote}\n\n[Voice] {text}")
@@ -2598,6 +2685,33 @@ Allowlist Telegram username (without '@') or numeric user ID.",
         self.send_media_by_url("sendVoice", "voice", chat_id, thread_id, url, caption)
             .await
     }
+
+    /// Attempt to synthesize text and send as a Telegram voice message.
+    ///
+    /// Returns `Ok(true)` if the voice message was sent successfully,
+    /// `Ok(false)` if synthesis is not available, or `Err` on failure.
+    async fn try_send_voice_reply(
+        &self,
+        chat_id: &str,
+        thread_id: Option<&str>,
+        text: &str,
+        config: &crate::config::SynthesisConfig,
+    ) -> anyhow::Result<bool> {
+        let output_dir = self
+            .workspace_dir
+            .as_deref()
+            .map(|w| w.join("tts_cache"))
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp/zeroclaw_tts"));
+
+        let ogg_path = super::synthesis::synthesize_speech(text, config, &output_dir).await?;
+
+        let result = self.send_voice(chat_id, thread_id, &ogg_path, None).await;
+
+        // Clean up the generated file regardless of send result
+        let _ = tokio::fs::remove_file(&ogg_path).await;
+
+        result.map(|()| true)
+    }
 }
 
 #[async_trait]
@@ -2631,7 +2745,7 @@ impl Channel for TelegramChannel {
         }
 
         let resp = self
-            .client
+            .http_client()
             .post(self.api_url("sendMessage"))
             .json(&body)
             .send()
@@ -2706,7 +2820,7 @@ impl Channel for TelegramChannel {
         });
 
         let resp = self
-            .client
+            .http_client()
             .post(self.api_url("editMessageText"))
             .json(&body)
             .send()
@@ -2756,7 +2870,7 @@ impl Channel for TelegramChannel {
             // Delete the draft message
             if let Some(id) = msg_id {
                 let _ = self
-                    .client
+                    .http_client()
                     .post(self.api_url("deleteMessage"))
                     .json(&serde_json::json!({
                         "chat_id": chat_id,
@@ -2782,10 +2896,10 @@ impl Channel for TelegramChannel {
         }
 
         // If text exceeds limit, delete draft and send as chunked messages
-        if text.len() > TELEGRAM_MAX_MESSAGE_LENGTH {
+        if text.chars().count() > TELEGRAM_MAX_MESSAGE_LENGTH {
             if let Some(id) = msg_id {
                 let _ = self
-                    .client
+                    .http_client()
                     .post(self.api_url("deleteMessage"))
                     .json(&serde_json::json!({
                         "chat_id": chat_id,
@@ -2816,7 +2930,7 @@ impl Channel for TelegramChannel {
         });
 
         let resp = self
-            .client
+            .http_client()
             .post(self.api_url("editMessageText"))
             .json(&body)
             .send()
@@ -2834,7 +2948,7 @@ impl Channel for TelegramChannel {
         });
 
         let resp = self
-            .client
+            .http_client()
             .post(self.api_url("editMessageText"))
             .json(&plain_body)
             .send()
@@ -2863,7 +2977,7 @@ impl Channel for TelegramChannel {
         };
 
         let response = self
-            .client
+            .http_client()
             .post(self.api_url("deleteMessage"))
             .json(&serde_json::json!({
                 "chat_id": chat_id,
@@ -2891,6 +3005,27 @@ impl Channel for TelegramChannel {
             Some((chat, thread)) => (chat, Some(thread)),
             None => (message.recipient.as_str(), None),
         };
+
+        // Voice reply: if synthesis is enabled and the last message in this chat was voice,
+        // synthesize audio and send as a voice message instead of text.
+        if let Some(ref synth_config) = self.synthesis {
+            let was_voice = self.voice_chats.lock().remove(chat_id);
+            if was_voice
+                && (!synth_config.voice_reply_only || was_voice)
+                && content.chars().count() <= synth_config.max_chars
+            {
+                match self
+                    .try_send_voice_reply(chat_id, thread_id, &content, synth_config)
+                    .await
+                {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => { /* synthesis unavailable, fall through to text */ }
+                    Err(e) => {
+                        tracing::warn!("Voice synthesis failed, falling back to text: {e}");
+                    }
+                }
+            }
+        }
 
         let (text_without_markers, attachments) = parse_attachment_markers(&content);
 
@@ -3214,16 +3349,84 @@ Ensure only one `zeroclaw` process is using this bot token."
             }
         });
 
-        let mut guard = self.typing_handle.lock();
-        *guard = Some(handle);
+        self.typing_handles
+            .lock()
+            .insert(recipient.to_string(), handle);
 
         Ok(())
     }
 
-    async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
-        let mut guard = self.typing_handle.lock();
-        if let Some(handle) = guard.take() {
+    async fn stop_typing(&self, recipient: &str) -> anyhow::Result<()> {
+        if let Some(handle) = self.typing_handles.lock().remove(recipient) {
             handle.abort();
+        }
+        Ok(())
+    }
+
+    async fn add_reaction(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        emoji: &str,
+    ) -> anyhow::Result<()> {
+        let msg_id: i64 = message_id
+            .strip_prefix("telegram_")
+            .and_then(|rest| rest.rsplit('_').next())
+            .unwrap_or(message_id)
+            .parse()
+            .context("invalid Telegram message_id for add_reaction")?;
+
+        let body = serde_json::json!({
+            "chat_id": channel_id,
+            "message_id": msg_id,
+            "reaction": [{"type": "emoji", "emoji": emoji}],
+        });
+
+        let resp = self
+            .http_client()
+            .post(self.api_url("setMessageReaction"))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err = resp.text().await.unwrap_or_default();
+            let sanitized = Self::sanitize_telegram_error(&err);
+            tracing::debug!("Telegram setMessageReaction (add) failed: {sanitized}");
+        }
+        Ok(())
+    }
+
+    async fn remove_reaction(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+        _emoji: &str,
+    ) -> anyhow::Result<()> {
+        let msg_id: i64 = message_id
+            .strip_prefix("telegram_")
+            .and_then(|rest| rest.rsplit('_').next())
+            .unwrap_or(message_id)
+            .parse()
+            .context("invalid Telegram message_id for remove_reaction")?;
+
+        let body = serde_json::json!({
+            "chat_id": channel_id,
+            "message_id": msg_id,
+            "reaction": [],
+        });
+
+        let resp = self
+            .http_client()
+            .post(self.api_url("setMessageReaction"))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err = resp.text().await.unwrap_or_default();
+            let sanitized = Self::sanitize_telegram_error(&err);
+            tracing::debug!("Telegram setMessageReaction (remove) failed: {sanitized}");
         }
         Ok(())
     }
@@ -3292,48 +3495,54 @@ mod tests {
     }
 
     #[test]
-    fn typing_handle_starts_as_none() {
+    fn typing_handles_starts_empty() {
         let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
-        let guard = ch.typing_handle.lock();
-        assert!(guard.is_none());
+        let guard = ch.typing_handles.lock();
+        assert!(guard.is_empty());
     }
 
     #[tokio::test]
     async fn stop_typing_clears_handle() {
         let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
 
-        // Manually insert a dummy handle
+        // Manually insert a dummy handle for chat "123"
         {
-            let mut guard = ch.typing_handle.lock();
-            *guard = Some(tokio::spawn(async {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-            }));
+            let mut guard = ch.typing_handles.lock();
+            guard.insert(
+                "123".to_string(),
+                tokio::spawn(async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                }),
+            );
         }
 
-        // stop_typing should abort and clear
+        // stop_typing should abort and remove for that recipient
         ch.stop_typing("123").await.unwrap();
 
-        let guard = ch.typing_handle.lock();
-        assert!(guard.is_none());
+        let guard = ch.typing_handles.lock();
+        assert!(!guard.contains_key("123"));
     }
 
     #[tokio::test]
     async fn start_typing_replaces_previous_handle() {
         let ch = TelegramChannel::new("fake-token".into(), vec!["*".into()], false);
 
-        // Insert a dummy handle first
+        // Insert a dummy handle for chat "123"
         {
-            let mut guard = ch.typing_handle.lock();
-            *guard = Some(tokio::spawn(async {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-            }));
+            let mut guard = ch.typing_handles.lock();
+            guard.insert(
+                "123".to_string(),
+                tokio::spawn(async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                }),
+            );
         }
 
         // start_typing should abort the old handle and set a new one
         let _ = ch.start_typing("123").await;
 
-        let guard = ch.typing_handle.lock();
-        assert!(guard.is_some());
+        let guard = ch.typing_handles.lock();
+        assert!(guard.contains_key("123"));
     }
 
     #[test]

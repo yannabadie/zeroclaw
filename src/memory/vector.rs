@@ -131,6 +131,74 @@ pub fn hybrid_merge(
     results
 }
 
+/// Reciprocal Rank Fusion (RRF): rank-based fusion that is more robust than
+/// weighted linear combination because it only depends on rank positions,
+/// not on score scales.
+///
+/// `final_score` = sum over sources of `1 / (k + rank)` where `k` is typically 60.
+///
+/// Each input list must be pre-sorted by descending score (best first).
+pub fn rrf_merge(
+    vector_results: &[(String, f32)],
+    keyword_results: &[(String, f32)],
+    k: f32,
+    limit: usize,
+) -> Vec<ScoredResult> {
+    use std::collections::HashMap;
+
+    let mut map: HashMap<String, ScoredResult> = HashMap::new();
+
+    // Vector results: assign RRF scores based on rank position.
+    for (rank, (id, score)) in vector_results.iter().enumerate() {
+        let rrf_score = 1.0 / (k + (rank as f32) + 1.0);
+        map.entry(id.clone())
+            .and_modify(|r| {
+                r.vector_score = Some(*score);
+                r.final_score += rrf_score;
+            })
+            .or_insert_with(|| ScoredResult {
+                id: id.clone(),
+                vector_score: Some(*score),
+                keyword_score: None,
+                final_score: rrf_score,
+            });
+    }
+
+    // Keyword results: assign RRF scores based on rank position.
+    for (rank, (id, score)) in keyword_results.iter().enumerate() {
+        let rrf_score = 1.0 / (k + (rank as f32) + 1.0);
+        map.entry(id.clone())
+            .and_modify(|r| {
+                r.keyword_score = Some(*score);
+                r.final_score += rrf_score;
+            })
+            .or_insert_with(|| ScoredResult {
+                id: id.clone(),
+                vector_score: None,
+                keyword_score: Some(*score),
+                final_score: rrf_score,
+            });
+    }
+
+    let mut results: Vec<ScoredResult> = map.into_values().collect();
+    results.sort_by(|a, b| {
+        b.final_score
+            .partial_cmp(&a.final_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results.truncate(limit);
+    results
+}
+
+/// Fusion strategy for hybrid search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FusionStrategy {
+    /// Weighted linear combination (legacy default).
+    WeightedLinear,
+    /// Reciprocal Rank Fusion (more robust across score scales).
+    Rrf,
+}
+
 #[cfg(test)]
 #[allow(
     clippy::float_cmp,
@@ -398,5 +466,73 @@ mod tests {
         let merged = hybrid_merge(&[("only".into(), 0.8)], &[], 0.7, 0.3, 10);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].id, "only");
+    }
+
+    // ── RRF tests ────────────────────────────────────────────────
+
+    #[test]
+    fn rrf_merge_basic() {
+        let vec_results = vec![("a".into(), 0.9), ("b".into(), 0.5)];
+        let kw_results = vec![("b".into(), 10.0), ("c".into(), 5.0)];
+        let merged = rrf_merge(&vec_results, &kw_results, 60.0, 10);
+        // "b" appears in both lists → highest RRF score
+        assert_eq!(merged[0].id, "b");
+        assert!(merged[0].vector_score.is_some());
+        assert!(merged[0].keyword_score.is_some());
+        assert_eq!(merged.len(), 3);
+    }
+
+    #[test]
+    fn rrf_merge_vector_only() {
+        let vec_results = vec![("a".into(), 0.9), ("b".into(), 0.5)];
+        let merged = rrf_merge(&vec_results, &[], 60.0, 10);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].id, "a"); // rank 1 → higher RRF score
+        assert!(merged[0].final_score > merged[1].final_score);
+    }
+
+    #[test]
+    fn rrf_merge_keyword_only() {
+        let kw_results = vec![("x".into(), 10.0), ("y".into(), 5.0)];
+        let merged = rrf_merge(&[], &kw_results, 60.0, 10);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].id, "x");
+    }
+
+    #[test]
+    fn rrf_merge_respects_limit() {
+        let vec_results: Vec<(String, f32)> = (0..20)
+            .map(|i| (format!("item_{i}"), 1.0 - i as f32 * 0.05))
+            .collect();
+        let merged = rrf_merge(&vec_results, &[], 60.0, 5);
+        assert_eq!(merged.len(), 5);
+    }
+
+    #[test]
+    fn rrf_merge_empty_inputs() {
+        let merged = rrf_merge(&[], &[], 60.0, 10);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn rrf_scores_are_rank_based() {
+        // With k=60, rank 1 gives 1/(60+1) = 0.01639, rank 2 gives 1/(60+2) = 0.01613
+        let vec_results = vec![("a".into(), 0.9), ("b".into(), 0.1)];
+        let merged = rrf_merge(&vec_results, &[], 60.0, 10);
+        // Score difference should be small since RRF is rank-based
+        let diff = merged[0].final_score - merged[1].final_score;
+        assert!(diff > 0.0);
+        assert!(diff < 0.01); // Very small difference between adjacent ranks
+    }
+
+    #[test]
+    fn rrf_overlap_boosts_score() {
+        let vec_results = vec![("a".into(), 0.9)];
+        let kw_results = vec![("a".into(), 10.0)];
+        let merged = rrf_merge(&vec_results, &kw_results, 60.0, 10);
+        assert_eq!(merged.len(), 1);
+        // Score should be sum of both RRF contributions: 1/61 + 1/61
+        let expected = 2.0 / 61.0;
+        assert!((merged[0].final_score - expected).abs() < 0.001);
     }
 }

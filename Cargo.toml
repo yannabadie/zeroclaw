@@ -168,6 +168,9 @@ nusb = { version = "0.2", default-features = false, optional = true }
 # probe-rs for STM32/Nucleo memory read (Phase B)
 probe-rs = { version = "0.31", optional = true }
 
+# Local ONNX embeddings (fastembed) — optional, enable with --features local-embeddings
+fastembed = { version = "5", default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"], optional = true }
+
 # PDF extraction for datasheet RAG (optional, enable with --features rag-pdf)
 pdf-extract = { version = "0.10", optional = true }
 tempfile = "3.14"
@@ -215,6 +218,8 @@ landlock = ["sandbox-landlock"]
 probe = ["dep:probe-rs"]
 # rag-pdf = PDF ingestion for datasheet RAG
 rag-pdf = ["dep:pdf-extract"]
+# local-embeddings = Local ONNX embedding inference (fastembed-rs, BGE-M3)
+local-embeddings = ["dep:fastembed"]
 # whatsapp-web = Native WhatsApp Web client with custom rusqlite storage backend
 whatsapp-web = ["dep:wa-rs", "dep:wa-rs-core", "dep:wa-rs-binary", "dep:wa-rs-proto", "dep:wa-rs-ureq-http", "dep:wa-rs-tokio-transport", "dep:serde-big-array", "dep:prost", "dep:qrcode"]
 

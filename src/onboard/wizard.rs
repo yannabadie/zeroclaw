@@ -179,6 +179,8 @@ pub async fn run_wizard(force: bool) -> Result<Config> {
         hardware: hardware_config,
         query_classification: crate::config::QueryClassificationConfig::default(),
         transcription: crate::config::TranscriptionConfig::default(),
+        synthesis: crate::config::SynthesisConfig::default(),
+        onedrive: crate::config::OneDriveConfig::default(),
         agents_ipc: crate::config::AgentsIpcConfig::default(),
         model_support_vision: None,
     };
@@ -386,6 +388,8 @@ fn memory_config_defaults_for_backend(backend: &str) -> MemoryConfig {
         embedding_dimensions: 1536,
         vector_weight: 0.7,
         keyword_weight: 0.3,
+        fusion_strategy: "weighted".into(),
+        rrf_k: 60.0,
         min_relevance_score: 0.4,
         embedding_cache_size: if profile.uses_sqlite_hygiene {
             10000
@@ -537,6 +541,8 @@ async fn run_quick_setup_with_home(
         hardware: crate::config::HardwareConfig::default(),
         query_classification: crate::config::QueryClassificationConfig::default(),
         transcription: crate::config::TranscriptionConfig::default(),
+        synthesis: crate::config::SynthesisConfig::default(),
+        onedrive: crate::config::OneDriveConfig::default(),
         agents_ipc: crate::config::AgentsIpcConfig::default(),
         model_support_vision: None,
     };

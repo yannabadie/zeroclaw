@@ -260,6 +260,14 @@ pub struct Config {
     #[serde(default)]
     pub transcription: TranscriptionConfig,
 
+    /// Speech synthesis (TTS) configuration for voice message replies.
+    #[serde(default)]
+    pub synthesis: SynthesisConfig,
+
+    /// OneDrive integration for cloud file access (`[onedrive]`).
+    #[serde(default)]
+    pub onedrive: OneDriveConfig,
+
     /// Inter-process agent communication (`[agents_ipc]`).
     #[serde(default)]
     pub agents_ipc: AgentsIpcConfig,
@@ -517,6 +525,116 @@ impl Default for TranscriptionConfig {
             model: default_transcription_model(),
             language: None,
             max_duration_secs: default_transcription_max_duration_secs(),
+        }
+    }
+}
+
+// ── Speech synthesis (TTS) ──────────────────────────────────────
+
+fn default_synthesis_backend() -> String {
+    "piper".into()
+}
+
+fn default_synthesis_voice() -> String {
+    "fr_FR-tom-medium".into()
+}
+
+fn default_synthesis_piper_path() -> String {
+    "piper".into()
+}
+
+/// Speech synthesis (TTS) configuration for voice message replies.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SynthesisConfig {
+    /// Enable voice synthesis for channels that support it.
+    #[serde(default)]
+    pub enabled: bool,
+    /// TTS backend: "piper" (local ONNX) or "edge-tts" (cloud, requires Python).
+    #[serde(default = "default_synthesis_backend")]
+    pub backend: String,
+    /// Voice name. For piper: model name (e.g. "fr_FR-tom-medium").
+    /// For edge-tts: voice ID (e.g. "fr-FR-DeniseNeural").
+    #[serde(default = "default_synthesis_voice")]
+    pub voice: String,
+    /// Path to the piper binary.
+    #[serde(default = "default_synthesis_piper_path")]
+    pub piper_path: String,
+    /// Path to the Piper ONNX model file (.onnx).
+    #[serde(default)]
+    pub model_path: String,
+    /// Reply with voice only when the incoming message was a voice message.
+    #[serde(default = "default_true")]
+    pub voice_reply_only: bool,
+    /// Maximum text length to synthesize (characters). Longer responses stay as text.
+    #[serde(default = "default_synthesis_max_chars")]
+    pub max_chars: usize,
+}
+
+fn default_synthesis_max_chars() -> usize {
+    4000
+}
+
+impl Default for SynthesisConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: default_synthesis_backend(),
+            voice: default_synthesis_voice(),
+            piper_path: default_synthesis_piper_path(),
+            model_path: String::new(),
+            voice_reply_only: true,
+            max_chars: default_synthesis_max_chars(),
+        }
+    }
+}
+
+// ── OneDrive ────────────────────────────────────────────────────
+
+fn default_onedrive_token_path() -> String {
+    "~/.zeroclaw/onedrive-token.json".into()
+}
+
+fn default_onedrive_write_root() -> String {
+    "/ZeroClaw".into()
+}
+
+fn default_onedrive_sync_interval_mins() -> u64 {
+    30
+}
+
+/// OneDrive integration configuration for personal Microsoft accounts.
+///
+/// Uses Microsoft Graph API with Device Code Flow OAuth2.
+/// Requires an Azure app registration with `Files.Read.All` and
+/// `Files.ReadWrite.AppFolder` (or `Files.ReadWrite`) + `offline_access` scopes.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct OneDriveConfig {
+    /// Enable OneDrive integration.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Azure AD application (client) ID for Device Code Flow.
+    #[serde(default)]
+    pub client_id: String,
+    /// OAuth2 token cache file path.
+    #[serde(default = "default_onedrive_token_path")]
+    pub token_path: String,
+    /// Root folder in OneDrive where ZeroClaw has write access.
+    /// Read access is granted to the entire drive.
+    #[serde(default = "default_onedrive_write_root")]
+    pub write_root: String,
+    /// Periodic sync interval in minutes for delta tracking.
+    #[serde(default = "default_onedrive_sync_interval_mins")]
+    pub sync_interval_mins: u64,
+}
+
+impl Default for OneDriveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            client_id: String::new(),
+            token_path: default_onedrive_token_path(),
+            write_root: default_onedrive_write_root(),
+            sync_interval_mins: default_onedrive_sync_interval_mins(),
         }
     }
 }
@@ -2036,6 +2154,13 @@ pub struct MemoryConfig {
     /// Weight for keyword BM25 in hybrid search (0.0–1.0)
     #[serde(default = "default_keyword_weight")]
     pub keyword_weight: f64,
+    /// Fusion strategy for hybrid search: "weighted" (linear combination) or "rrf" (Reciprocal Rank Fusion).
+    /// RRF is more robust across score scales; weighted is the legacy default.
+    #[serde(default = "default_fusion_strategy")]
+    pub fusion_strategy: String,
+    /// RRF k parameter (only used when fusion_strategy = "rrf"). Default: 60.
+    #[serde(default = "default_rrf_k")]
+    pub rrf_k: f64,
     /// Minimum hybrid score (0.0–1.0) for a memory to be included in context.
     /// Memories scoring below this threshold are dropped to prevent irrelevant
     /// context from bleeding into conversations. Default: 0.4
@@ -2110,6 +2235,12 @@ fn default_vector_weight() -> f64 {
 fn default_keyword_weight() -> f64 {
     0.3
 }
+fn default_fusion_strategy() -> String {
+    "weighted".into()
+}
+fn default_rrf_k() -> f64 {
+    60.0
+}
 fn default_min_relevance_score() -> f64 {
     0.4
 }
@@ -2140,6 +2271,8 @@ impl Default for MemoryConfig {
             embedding_dimensions: default_embedding_dims(),
             vector_weight: default_vector_weight(),
             keyword_weight: default_keyword_weight(),
+            fusion_strategy: default_fusion_strategy(),
+            rrf_k: default_rrf_k(),
             min_relevance_score: default_min_relevance_score(),
             embedding_cache_size: default_cache_size(),
             chunk_max_tokens: default_chunk_size(),
@@ -4645,6 +4778,8 @@ impl Default for Config {
             hardware: HardwareConfig::default(),
             query_classification: QueryClassificationConfig::default(),
             transcription: TranscriptionConfig::default(),
+            synthesis: SynthesisConfig::default(),
+            onedrive: OneDriveConfig::default(),
             agents_ipc: AgentsIpcConfig::default(),
             model_support_vision: None,
         }
@@ -6900,6 +7035,8 @@ default_temperature = 0.7
             hooks: HooksConfig::default(),
             hardware: HardwareConfig::default(),
             transcription: TranscriptionConfig::default(),
+            synthesis: SynthesisConfig::default(),
+            onedrive: OneDriveConfig::default(),
             agents_ipc: AgentsIpcConfig::default(),
             model_support_vision: None,
         };
@@ -7268,6 +7405,8 @@ tool_dispatcher = "xml"
             hooks: HooksConfig::default(),
             hardware: HardwareConfig::default(),
             transcription: TranscriptionConfig::default(),
+            synthesis: SynthesisConfig::default(),
+            onedrive: OneDriveConfig::default(),
             agents_ipc: AgentsIpcConfig::default(),
             model_support_vision: None,
         };
