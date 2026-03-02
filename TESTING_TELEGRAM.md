@@ -115,6 +115,9 @@ After running automated tests, perform these manual checks:
     - Send message with @botname mention
     - Verify: Bot responds and mention is stripped
     - DM/private chat should always work regardless of mention_only
+    - Regression check (group non-text): verify group media without mention does not trigger bot reply
+    - Regression command:
+      `cargo test -q telegram_mention_only_group_photo_without_caption_is_ignored`
 
 6. **Error logging**
 
@@ -297,7 +300,7 @@ on: [push, pull_request]
 
 jobs:
   test:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: [self-hosted, aws-india]
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rs/toolchain@v1

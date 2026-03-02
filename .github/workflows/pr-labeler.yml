@@ -3,7 +3,7 @@ name: PR Labeler
 on:
     pull_request_target:
         branches: [dev, main]
-        types: [opened, reopened, synchronize, edited, labeled, unlabeled]
+        types: [opened, reopened, synchronize, ready_for_review]
     workflow_dispatch:
         inputs:
             mode:
@@ -32,7 +32,7 @@ env:
 
 jobs:
     label:
-        runs-on: [self-hosted, aws-india]
+        runs-on: ubuntu-22.04
         steps:
             - name: Checkout repository
               uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
